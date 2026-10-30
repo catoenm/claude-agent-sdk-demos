@@ -1,0 +1,18 @@
+services:
+  chat:
+    image: tracepath-chat-demo:local
+    build: .
+    ports: ['127.0.0.1:4420:3001']
+    environment:
+      AGENT_MODE: ${AGENT_MODE:-mock}
+      AGENT_WORKDIR: /home/node/agent
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-haiku}
+      TRACEPATH_REVISION: ${TRACEPATH_REVISION:?Start through npm run demo:start}
+      TRACEPATH_DEMO_TOKEN: ${TRACEPATH_DEMO_TOKEN:?Start through npm run demo:start}
+      TURN_TIMEOUT_MS: ${TURN_TIMEOUT_MS:-8000}
+    healthcheck:
+      test: ['CMD', 'node', '-e', 'fetch("http://localhost:3001/health").then(r=>{if(!r.ok)process.exit(1)})']
+      interval: 3s
+      timeout: 3s
+      retries: 20

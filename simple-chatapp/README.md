@@ -1,3 +1,5 @@
+> **This fork:** Start with [TRACEPATH.md](TRACEPATH.md) for the Docker setup, mock mode, tracing, and current integration limitations. The original upstream instructions are retained below for reference.
+
 # Simple Chat App
 
 A demo chat application using the Claude Agent SDK with a React frontend and Express backend.

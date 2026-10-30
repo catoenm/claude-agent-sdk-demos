@@ -1,165 +1,204 @@
 import "dotenv/config";
 import express from "express";
-import cors from "cors";
-import { createServer } from "http";
-import { WebSocketServer, WebSocket } from "ws";
-import path from "path";
-import { fileURLToPath } from "url";
-import type { WSClient, IncomingWSMessage } from "./types.js";
-import { chatStore } from "./chat-store.js";
+import type { AddressInfo } from "node:net";
+import type { IncomingMessage } from "node:http";
+import { createServer } from "node:http";
+import { timingSafeEqual } from "node:crypto";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { WebSocketServer } from "ws";
+import type { WSClient } from "./types.js";
 import { Session } from "./session.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const PORT = process.env.PORT || 3001;
-
-// Express app
-const app = express();
-app.use(cors());
-app.use(express.json());
-
-// Serve static files from client directory
-app.use("/client", express.static(path.join(__dirname, "../client")));
-
-// Serve index.html at root
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "../client/index.html"));
-});
-
-// Session management
-const sessions: Map<string, Session> = new Map();
-
-function getOrCreateSession(chatId: string): Session {
-  let session = sessions.get(chatId);
-  if (!session) {
-    session = new Session(chatId);
-    sessions.set(chatId, session);
+import {
+  listChats,
+  createChat,
+  getChat,
+  deleteChat,
+  getMessages,
+  fail,
+} from "./chat-operations.js";
+import { runChatTurn, forgetSession } from "./chat-turn.js";
+import { agentMode } from "./ai-client.js";
+import { getSpans, operation, requestContext } from "./telemetry.js";
+function allowedOrigin(origin: string | undefined, host: string | undefined) {
+  if (!origin) return true;
+  try {
+    return new URL(origin).host === host;
+  } catch {
+    return false;
   }
-  return session;
 }
-
-// REST API: Get all chats
-app.get("/api/chats", (req, res) => {
-  const chats = chatStore.getAllChats();
-  res.json(chats);
+const app = express();
+app.use(express.json({ limit: "16kb" }));
+app.use((req, res, next) => {
+  if (
+    req.headers.origin &&
+    new URL(req.headers.origin).host !== req.headers.host
+  )
+    return res.sendStatus(403);
+  next();
 });
-
-// REST API: Create new chat
-app.post("/api/chats", (req, res) => {
-  const chat = chatStore.createChat(req.body?.title);
-  res.status(201).json(chat);
+const sessions = new Map<string, Session>();
+const errorStatus = (error: unknown) =>
+  typeof error === "object" && error && "status" in error
+    ? Number(error.status)
+    : 500;
+const errorMessage = (error: unknown) =>
+  error instanceof Error ? error.message : "Request failed";
+async function respond(
+  req: express.Request,
+  res: express.Response,
+  work: () => unknown,
+  status = 200,
+) {
+  await requestContext(req.headers, async (ids) => {
+    res.setHeader("x-tracepath-run", ids.runId);
+    try {
+      res.status(status).json(await work());
+    } catch (error) {
+      res.status(errorStatus(error)).json({ error: errorMessage(error) });
+    }
+  });
+}
+export async function health() {
+  return operation("api.health", () => ({
+    ok: true,
+    mode: agentMode,
+    revision: process.env.TRACEPATH_REVISION ?? "unversioned",
+  }));
+}
+app.get("/health", async (req, res) => {
+  await respond(req, res, health);
 });
-
-// REST API: Get single chat
-app.get("/api/chats/:id", (req, res) => {
-  const chat = chatStore.getChat(req.params.id);
-  if (!chat) {
-    return res.status(404).json({ error: "Chat not found" });
-  }
-  res.json(chat);
+app.get("/api/chats", async (req, res) => {
+  await respond(req, res, listChats);
 });
-
-// REST API: Delete chat
-app.delete("/api/chats/:id", (req, res) => {
-  const deleted = chatStore.deleteChat(req.params.id);
-  if (!deleted) {
-    return res.status(404).json({ error: "Chat not found" });
-  }
-  const session = sessions.get(req.params.id);
-  if (session) {
-    session.close();
+app.post("/api/chats", async (req, res) => {
+  await respond(req, res, () => createChat(req.body?.title), 201);
+});
+app.get("/api/chats/:id", async (req, res) => {
+  await respond(req, res, () => getChat(req.params.id));
+});
+app.delete("/api/chats/:id", async (req, res) => {
+  await respond(req, res, async () => {
+    const result = await deleteChat(req.params.id);
+    sessions.get(req.params.id)?.close();
     sessions.delete(req.params.id);
-  }
-  res.json({ success: true });
+    forgetSession(req.params.id);
+    return result;
+  });
 });
-
-// REST API: Get chat messages
-app.get("/api/chats/:id/messages", (req, res) => {
-  const messages = chatStore.getMessages(req.params.id);
-  res.json(messages);
+app.get("/api/chats/:id/messages", async (req, res) => {
+  await respond(req, res, () => getMessages(req.params.id));
 });
-
-// Create HTTP server
+app.post("/api/chat-turns", async (req, res) => {
+  await respond(req, res, () => runChatTurn(req.body));
+});
+app.get("/tracepath/spans/:runId", (req, res) => {
+  const expected = Buffer.from(process.env.TRACEPATH_DEMO_TOKEN ?? "");
+  const supplied = Buffer.from(String(req.headers["x-demo-token"] ?? ""));
+  if (
+    !expected.length ||
+    expected.length !== supplied.length ||
+    !timingSafeEqual(expected, supplied)
+  )
+    return res.sendStatus(401);
+  res.json(getSpans(req.params.runId));
+});
+const dist = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../dist",
+);
+if (existsSync(dist)) {
+  app.use(express.static(dist));
+  app.get("/", (_req, res) => res.sendFile(path.join(dist, "index.html")));
+}
 const server = createServer(app);
-
-// WebSocket server
-const wss = new WebSocketServer({ server, path: "/ws" });
-
+const wss = new WebSocketServer({
+  server,
+  path: "/ws",
+  maxPayload: 16384,
+  verifyClient: ({ origin, req }: { origin: string; req: IncomingMessage }) =>
+    allowedOrigin(origin, req.headers.host),
+});
 wss.on("connection", (ws: WSClient) => {
-  console.log("WebSocket client connected");
   ws.isAlive = true;
-
-  ws.send(JSON.stringify({ type: "connected", message: "Connected to chat server" }));
-
+  ws.send(JSON.stringify({ type: "connected", mode: agentMode }));
   ws.on("pong", () => {
     ws.isAlive = true;
   });
-
-  ws.on("message", (data) => {
+  ws.on("message", async (data) => {
     try {
-      const message: IncomingWSMessage = JSON.parse(data.toString());
-
-      switch (message.type) {
-        case "subscribe": {
-          const session = getOrCreateSession(message.chatId);
-          session.subscribe(ws);
-          console.log(`Client subscribed to chat ${message.chatId}`);
-
-          // Send existing messages
-          const messages = chatStore.getMessages(message.chatId);
-          ws.send(JSON.stringify({
-            type: "history",
-            messages,
-            chatId: message.chatId,
-          }));
-          break;
-        }
-
-        case "chat": {
-          const session = getOrCreateSession(message.chatId);
-          session.subscribe(ws);
-          session.sendMessage(message.content);
-          break;
-        }
-
-        default:
-          console.warn("Unknown message type:", (message as any).type);
-      }
+      const message = JSON.parse(data.toString());
+      if (
+        !message ||
+        !["subscribe", "chat"].includes(message.type) ||
+        typeof message.chatId !== "string"
+      )
+        throw fail(400, "Invalid WebSocket message");
+      await requestContext(
+        {
+          "x-tracepath-run": message.runId,
+          "x-tracepath-request": message.requestId,
+        },
+        async (ids) => {
+          try {
+            if (message.type === "subscribe") await getChat(message.chatId);
+            let session = sessions.get(message.chatId);
+            if (!session) {
+              session = new Session(message.chatId);
+              sessions.set(message.chatId, session);
+            }
+            for (const other of sessions.values()) other.unsubscribe(ws);
+            session.subscribe(ws);
+            if (message.type === "subscribe")
+              ws.send(
+                JSON.stringify({
+                  type: "history",
+                  messages: await getMessages(message.chatId),
+                  chatId: message.chatId,
+                }),
+              );
+            else {
+              await session.sendMessage(message.content);
+              ws.send(JSON.stringify({ type: "trace", ...ids }));
+            }
+          } catch (error) {
+            ws.send(
+              JSON.stringify({
+                type: "error",
+                error: errorMessage(error),
+                status: errorStatus(error),
+                ...ids,
+              }),
+            );
+          }
+        },
+      );
     } catch (error) {
-      console.error("Error handling WebSocket message:", error);
-      ws.send(JSON.stringify({ type: "error", error: "Invalid message format" }));
+      ws.send(JSON.stringify({ type: "error", error: errorMessage(error) }));
     }
   });
-
   ws.on("close", () => {
-    console.log("WebSocket client disconnected");
-    // Unsubscribe from all sessions
-    for (const session of sessions.values()) {
-      session.unsubscribe(ws);
-    }
+    for (const session of sessions.values()) session.unsubscribe(ws);
   });
 });
-
-// Heartbeat to detect dead connections
 const heartbeat = setInterval(() => {
-  wss.clients.forEach((ws) => {
-    const client = ws as WSClient;
-    if (client.isAlive === false) {
-      return client.terminate();
+  for (const client of wss.clients as Set<WSClient>) {
+    if (!client.isAlive) client.terminate();
+    else {
+      client.isAlive = false;
+      client.ping();
     }
-    client.isAlive = false;
-    client.ping();
-  });
+  }
 }, 30000);
-
-wss.on("close", () => {
-  clearInterval(heartbeat);
-});
-
-// Start server
-server.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
-  console.log(`WebSocket endpoint available at ws://localhost:${PORT}/ws`);
-  console.log(`Visit http://localhost:${PORT} to view the chat interface`);
-});
+wss.on("close", () => clearInterval(heartbeat));
+server.listen(
+  Number(process.env.PORT ?? 3001),
+  process.env.HOST ?? "127.0.0.1",
+  () =>
+    console.log(
+      `Chat demo: port ${(server.address() as AddressInfo).port}, mode ${agentMode}`,
+    ),
+);

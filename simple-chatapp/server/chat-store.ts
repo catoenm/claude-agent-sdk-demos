@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from "uuid";
+import { randomUUID as uuidv4 } from "node:crypto";
 import type { Chat, ChatMessage } from "./types.js";
 
 // Simple in-memory store for chats
@@ -26,7 +26,8 @@ class ChatStore {
 
   getAllChats(): Chat[] {
     return Array.from(this.chats.values()).sort(
-      (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+      (a, b) =>
+        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
     );
   }
 
@@ -44,7 +45,10 @@ class ChatStore {
     return this.chats.delete(id);
   }
 
-  addMessage(chatId: string, message: Omit<ChatMessage, "id" | "chatId" | "timestamp">): ChatMessage {
+  addMessage(
+    chatId: string,
+    message: Omit<ChatMessage, "id" | "chatId" | "timestamp">,
+  ): ChatMessage {
     const messages = this.messages.get(chatId);
     if (!messages) {
       throw new Error(`Chat ${chatId} not found`);
@@ -65,7 +69,9 @@ class ChatStore {
 
       // Auto-generate title from first user message if still "New Chat"
       if (chat.title === "New Chat" && message.role === "user") {
-        chat.title = message.content.slice(0, 50) + (message.content.length > 50 ? "..." : "");
+        chat.title =
+          message.content.slice(0, 50) +
+          (message.content.length > 50 ? "..." : "");
       }
     }
 

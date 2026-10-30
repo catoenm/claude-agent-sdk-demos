@@ -1,0 +1,209 @@
+{
+  "version": 1,
+  "instrumentationFiles": ["simple-chatapp/server/telemetry.ts"],
+  "operations": [
+    {
+      "id": "chat.list",
+      "label": "List chats",
+      "service": "chat-api",
+      "kind": "internal",
+      "path": "simple-chatapp/server/chat-operations.ts",
+      "symbol": "listChats"
+    },
+    {
+      "id": "chat.create",
+      "label": "Create chat",
+      "service": "chat-api",
+      "kind": "internal",
+      "path": "simple-chatapp/server/chat-operations.ts",
+      "symbol": "createChat"
+    },
+    {
+      "id": "chat.get",
+      "label": "Read chat",
+      "service": "chat-api",
+      "kind": "internal",
+      "path": "simple-chatapp/server/chat-operations.ts",
+      "symbol": "getChat"
+    },
+    {
+      "id": "chat.delete",
+      "label": "Delete chat",
+      "service": "chat-api",
+      "kind": "internal",
+      "path": "simple-chatapp/server/chat-operations.ts",
+      "symbol": "deleteChat"
+    },
+    {
+      "id": "chat.messages",
+      "label": "Read messages",
+      "service": "chat-api",
+      "kind": "internal",
+      "path": "simple-chatapp/server/chat-operations.ts",
+      "symbol": "getMessages"
+    },
+    {
+      "id": "store.user",
+      "label": "Store user message",
+      "service": "chat-api",
+      "kind": "internal",
+      "path": "simple-chatapp/server/chat-operations.ts",
+      "symbol": "appendUser"
+    },
+    {
+      "id": "store.assistant",
+      "label": "Store assistant message",
+      "service": "chat-api",
+      "kind": "internal",
+      "path": "simple-chatapp/server/chat-operations.ts",
+      "symbol": "appendAssistant"
+    },
+    {
+      "id": "chat.turn",
+      "label": "Run chat turn",
+      "service": "chat-api",
+      "kind": "internal",
+      "path": "simple-chatapp/server/chat-turn.ts",
+      "symbol": "runChatTurn"
+    },
+    {
+      "id": "agent.respond",
+      "label": "Select agent backend",
+      "service": "chat-api",
+      "kind": "internal",
+      "path": "simple-chatapp/server/ai-client.ts",
+      "symbol": "respondToMessage"
+    },
+    {
+      "id": "agent.mock",
+      "label": "Mock reply (no model call)",
+      "service": "chat-api",
+      "kind": "internal",
+      "path": "simple-chatapp/server/ai-client.ts",
+      "symbol": "mockReply"
+    },
+    {
+      "id": "agent.claude",
+      "label": "Claude SDK turn",
+      "service": "chat-api",
+      "kind": "http",
+      "path": "simple-chatapp/server/ai-client.ts",
+      "symbol": "claudeReply",
+      "destination": "Anthropic Claude"
+    },
+    {
+      "id": "api.health",
+      "label": "Chat API health",
+      "service": "chat-api",
+      "kind": "internal",
+      "path": "simple-chatapp/server/server.ts",
+      "symbol": "health"
+    }
+  ],
+  "entrypoints": [
+    {
+      "method": "POST",
+      "route": "/api/chat-turns",
+      "operation": "chat.turn",
+      "path": "simple-chatapp/server/server.ts",
+      "payloadKind": "json",
+      "scenarioIds": ["success", "failure", "concurrent", "timeout"]
+    },
+    {
+      "method": "POST",
+      "route": "/api/chats",
+      "operation": "chat.create",
+      "path": "simple-chatapp/server/server.ts",
+      "payloadKind": "json",
+      "scenarioIds": ["chat.create"]
+    },
+    {
+      "method": "GET",
+      "route": "/api/chats",
+      "operation": "chat.list",
+      "path": "simple-chatapp/server/server.ts",
+      "payloadKind": "empty",
+      "scenarioIds": ["chat.list"]
+    },
+    {
+      "method": "GET",
+      "route": "/health",
+      "operation": "api.health",
+      "path": "simple-chatapp/server/server.ts",
+      "payloadKind": "empty",
+      "scenarioIds": ["api.health"]
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "success",
+      "label": "Successful mock turn",
+      "description": "Creates a chat, stores the prompt, runs the mock, and stores its reply.",
+      "requests": [
+        {
+          "content": "Explain what this app does."
+        }
+      ]
+    },
+    {
+      "id": "failure",
+      "label": "Mock agent failure",
+      "description": "Returns 502; user message remains, no assistant message is written.",
+      "requests": [
+        {
+          "content": "Demonstrate a failure",
+          "mockFailure": true
+        }
+      ]
+    },
+    {
+      "id": "concurrent",
+      "label": "Three independent chats",
+      "description": "Three mock turns overlap with distinct request and trace IDs.",
+      "requests": [
+        {
+          "content": "Hello"
+        },
+        {
+          "content": "Explain tracing"
+        },
+        {
+          "content": "Plan a short trip"
+        }
+      ]
+    },
+    {
+      "id": "timeout",
+      "label": "Mock turn timeout",
+      "description": "Default 8-second deadline aborts a 10-second mock; no late reply is saved.",
+      "requests": [
+        {
+          "content": "Demonstrate timeout",
+          "mockDelayMs": 10000
+        }
+      ]
+    },
+    {
+      "id": "chat.create",
+      "label": "Create an empty chat",
+      "description": "Creates chat metadata without invoking an agent.",
+      "requests": [
+        {
+          "title": "Tracepath chat"
+        }
+      ]
+    },
+    {
+      "id": "chat.list",
+      "label": "List chats",
+      "description": "Reads the in-memory chat store.",
+      "requests": [{}]
+    },
+    {
+      "id": "api.health",
+      "label": "Health check",
+      "description": "Reports agent mode and source revision.",
+      "requests": [{}]
+    }
+  ]
+}

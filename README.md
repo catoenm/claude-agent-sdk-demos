@@ -1,3 +1,5 @@
+> **Tracepath fork:** The instrumented Simple Chat App runs locally with an explicitly labeled mock agent, Docker setup, and OpenTelemetry. See [setup and integration status](simple-chatapp/TRACEPATH.md). Other upstream demos below are unchanged.
+
 # Claude Agent SDK Demos
 
 > ⚠️ **IMPORTANT**: These are demo applications by Anthropic. They are intended for local development only and should NOT be deployed to production or used at scale.

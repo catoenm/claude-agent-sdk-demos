@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
-import useWebSocket, { ReadyState } from "react-use-websocket";
+// Named export avoids ambiguous CommonJS default interop in the production bundle.
+import { useWebSocket } from "react-use-websocket/dist/lib/use-websocket.js";
+import { ReadyState } from "react-use-websocket";
 import { ChatList } from "./components/ChatList";
 import { ChatWindow } from "./components/ChatWindow";
 
@@ -21,9 +23,11 @@ interface Message {
 
 // Use relative URLs - Vite will proxy to the backend
 const API_BASE = "/api";
-const WS_URL = `ws://${window.location.hostname}:3001/ws`;
+const WS_URL = `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}/ws`;
 
 export default function App() {
+  const [agentMode, setAgentMode] = useState("connecting");
+  const [chatError, setChatError] = useState<string | null>(null);
   const [chats, setChats] = useState<Chat[]>([]);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -33,7 +37,7 @@ export default function App() {
   const handleWSMessage = useCallback((message: any) => {
     switch (message.type) {
       case "connected":
-        console.log("Connected to server");
+        setAgentMode(message.mode);
         break;
 
       case "history":
@@ -81,17 +85,20 @@ export default function App() {
         break;
 
       case "error":
-        console.error("Server error:", message.error);
+        setChatError(message.error);
         setIsLoading(false);
         break;
     }
   }, []);
 
-  const { sendJsonMessage, readyState, lastJsonMessage } = useWebSocket(WS_URL, {
-    shouldReconnect: () => true,
-    reconnectAttempts: 10,
-    reconnectInterval: 3000,
-  });
+  const { sendJsonMessage, readyState, lastJsonMessage } = useWebSocket(
+    WS_URL,
+    {
+      shouldReconnect: () => true,
+      reconnectAttempts: 10,
+      reconnectInterval: 3000,
+    },
+  );
 
   const isConnected = readyState === ReadyState.OPEN;
 
@@ -167,6 +174,7 @@ export default function App() {
       },
     ]);
 
+    setChatError(null);
     setIsLoading(true);
 
     // Send via WebSocket
@@ -183,26 +191,41 @@ export default function App() {
   }, []);
 
   return (
-    <div className="flex h-screen">
-      {/* Sidebar */}
-      <div className="w-64 shrink-0">
-        <ChatList
-          chats={chats}
-          selectedChatId={selectedChatId}
-          onSelectChat={selectChat}
-          onNewChat={createChat}
-          onDeleteChat={deleteChat}
+    <div className="flex h-screen flex-col">
+      <div className="border-b bg-slate-100 px-4 py-2 text-sm text-slate-800">
+        Tracepath demo ·{" "}
+        {agentMode === "mock"
+          ? "Mock agent — no Claude API calls"
+          : agentMode === "claude"
+            ? "Claude agent"
+            : "Connecting…"}
+        {chatError && (
+          <span role="alert" className="ml-4 text-red-700">
+            {chatError}
+          </span>
+        )}
+      </div>
+      <div className="flex min-h-0 flex-1">
+        {/* Sidebar */}
+        <div className="w-64 shrink-0">
+          <ChatList
+            chats={chats}
+            selectedChatId={selectedChatId}
+            onSelectChat={selectChat}
+            onNewChat={createChat}
+            onDeleteChat={deleteChat}
+          />
+        </div>
+
+        {/* Main chat area */}
+        <ChatWindow
+          chatId={selectedChatId}
+          messages={messages}
+          isConnected={isConnected}
+          isLoading={isLoading}
+          onSendMessage={handleSendMessage}
         />
       </div>
-
-      {/* Main chat area */}
-      <ChatWindow
-        chatId={selectedChatId}
-        messages={messages}
-        isConnected={isConnected}
-        isLoading={isLoading}
-        onSendMessage={handleSendMessage}
-      />
     </div>
   );
 }
